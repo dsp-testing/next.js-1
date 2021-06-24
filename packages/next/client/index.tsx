@@ -439,11 +439,6 @@ export async function render(renderingProps: RenderRouteInfo): Promise<void> {
   }
 }
 
-// This indicator is used to detect if loop occurs between `renderError` and
-// `componentDidCatch`. If there's one, fallback to the simple fallback error
-let renderErrorResolving = false
-// FallbackError component shows when unexpected error occurs on custom _error page
-
 // This method handles all runtime and debug errors.
 // 404 and 500 errors are special kind of errors
 // and they are still handle via the main render method.
@@ -469,41 +464,41 @@ export function renderError(renderErrorProps: RenderErrorProps): Promise<any> {
 
   // Make sure we log the error to the console, otherwise users can't track down issues.
   console.error(err)
-  const errorComponentPromise = renderErrorResolving
-    ? import('../pages/_error').then((m) => ({
-        page: m.default,
-        styleSheets: [],
-      }))
-    : pageLoader.loadPage('/_error')
-
-  renderErrorResolving = true
-  return errorComponentPromise.then(({ page: ErrorComponent, styleSheets }) => {
-    // In production we do a normal render with the `ErrorComponent` as component.
-    // If we've gotten here upon initial render, we can use the props from the server.
-    // Otherwise, we need to call `getInitialProps` on `App` before mounting.
-    const AppTree = wrapApp(App)
-    const appCtx = {
-      Component: ErrorComponent,
-      AppTree,
-      router,
-      ctx: { err, pathname: page, query, asPath, AppTree },
-    }
-    return Promise.resolve(
-      renderErrorProps.props
-        ? renderErrorProps.props
-        : loadGetInitialProps(App, appCtx)
-    ).then((initProps) =>
-      doRender({
-        ...renderErrorProps,
-        err,
+  return pageLoader
+    .loadPage('/_error')
+    .then(({ page: ErrorComponent, styleSheets }) => {
+      return lastAppProps?.Component === ErrorComponent
+        ? import('../pages/_error').then((m) => ({
+            page: m.default as React.ComponentType<{}>,
+            styleSheets: [],
+          }))
+        : { page: ErrorComponent, styleSheets }
+    })
+    .then(({ page: ErrorComponent, styleSheets }) => {
+      // In production we do a normal render with the `ErrorComponent` as component.
+      // If we've gotten here upon initial render, we can use the props from the server.
+      // Otherwise, we need to call `getInitialProps` on `App` before mounting.
+      const AppTree = wrapApp(App)
+      const appCtx = {
         Component: ErrorComponent,
-        styleSheets,
-        props: initProps,
-      }).then(() => {
-        renderErrorResolving = false
-      })
-    )
-  })
+        AppTree,
+        router,
+        ctx: { err, pathname: page, query, asPath, AppTree },
+      }
+      return Promise.resolve(
+        renderErrorProps.props
+          ? renderErrorProps.props
+          : loadGetInitialProps(App, appCtx)
+      ).then((initProps) =>
+        doRender({
+          ...renderErrorProps,
+          err,
+          Component: ErrorComponent,
+          styleSheets,
+          props: initProps,
+        })
+      )
+    })
 }
 
 let reactRoot: any = null
