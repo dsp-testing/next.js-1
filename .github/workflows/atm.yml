@@ -1,0 +1,88 @@
+name: "CodeQL + ATM analysis"
+
+on:
+  push:
+    paths:
+      - '.github/workflows/codeql-analysis-with-atm-query-suite.yml'
+  workflow_dispatch:
+
+env:
+  BASE_URL: 'https://atmcodeqlpublicdata.blob.core.windows.net/atmpublic/query-suite/threshold1-v0.0.2+0f9e88c'
+  CLI_ADDITIONS_CHECKSUM: 'd044ff8700e29fd1076cc3795da24d3a2465e58997820b65636a4753ffaea32f67ea540f61d899d698e6dc5f0562ed16a7921444d6d05b4d436e47a12a63a07d'
+  QLPACK_CHECKSUM: '6230813ceed1d0ea31993340fa607a8dd5c53a967895dcdd92ace1cc7bcb9137935598578592684990a4c6b8811c550a843ae2afb43aed7278920607fe9896ba'
+
+jobs:
+  CodeQL-Build:
+    runs-on: ubuntu-latest-xl
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install ATM query pack
+        run: |
+          qlpack_url="${BASE_URL}/codeql-atm-qlpack.tar.gz"
+          echo "Attempting to download ATM query pack from ${qlpack_url}"
+          azcopy10 cp "${qlpack_url}" qlpack.tar.gz
+          if ! echo "${QLPACK_CHECKSUM} *qlpack.tar.gz" | shasum -c; then
+            echo "::error::Failed to validate ATM query pack checksum. Expected ${QLPACK_CHECKSUM}, was " \
+              "$(sha512sum -b qlpack.tar.gz | awk '{ print $1 }')"
+            exit 1
+          fi
+          mkdir -p .github/codeql
+          atm_qlpack_path=".github/codeql/codeql-javascript-atm"
+          mkdir ${atm_qlpack_path}
+          tar -xvzf qlpack.tar.gz -C ${atm_qlpack_path}
+          rm qlpack.tar.gz
+          ls -lR ${atm_qlpack_path}
+          # Add ATM query pack to the CodeQL search path
+          CODEQL_CONFIG_FILE="${RUNNER_TEMP}/codeql_config"
+          echo "CODEQL_CONFIG_FILE=${CODEQL_CONFIG_FILE}" >> ${GITHUB_ENV}
+          echo "--search-path ${atm_qlpack_path}" >> ${CODEQL_CONFIG_FILE}
+          echo "ATM CodeQL CLI config file contents:"
+          cat ${CODEQL_CONFIG_FILE}
+          echo "name: \"ATM CodeQL config\"" > .github/codeql/codeql-config.yml
+          echo "disable-default-queries: true" >> .github/codeql/codeql-config.yml
+          echo "queries:" >> .github/codeql/codeql-config.yml
+          echo "  - uses: ./${atm_qlpack_path}/codeql-suites/javascript-atm-code-scanning.qls" >> .github/codeql/codeql-config.yml
+          echo "ATM Code Scanning config file contents:"
+          cat .github/codeql/codeql-config.yml
+      # Initializes the CodeQL tools for scanning.
+      - name: Initialize CodeQL
+        id: codeql-init
+        uses: github/codeql-action/init@v1
+        with:
+          config-file: ./.github/codeql/codeql-config.yml
+          languages: javascript
+          tools: https://github.com/dsp-testing/codeml-testing/releases/download/codeql-bundle-20210615/codeql-bundle-linux64.tar.gz
+
+      - name: Install ATM CLI additions
+        env:
+          CODEQL_PATH: ${{ steps.codeql-init.outputs.codeql-path }}
+        run: |
+          cli_root="$(dirname ${CODEQL_PATH})"
+          echo "Using CodeQL CLI root at ${cli_root}"
+          cli_additions_url="${BASE_URL}/codeql-atm-cli-additions.tar.gz"
+          echo "Attempting to download ATM CLI additions from ${cli_additions_url}"
+          azcopy10 cp "${cli_additions_url}" cli-additions.tar.gz
+          if ! echo "${CLI_ADDITIONS_CHECKSUM} *cli-additions.tar.gz" | sha512sum -c; then
+            echo "::error::Failed to validate ATM CLI additions checksum. Expected ${CLI_ADDITIONS_CHECKSUM}, was " \
+              "$(sha512sum -b cli-additions.tar.gz | awk '{ print $1 }')"
+            exit 1
+          fi
+          tar -xvzf cli-additions.tar.gz -C ${cli_root}
+          rm cli-additions.tar.gz
+          ls -lR ${cli_root}/lib-extra
+          ls -lR ${cli_root}/ml-models
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v1
+        with:
+          ram: 5120
+          output: '.github/codeql/codeql-javascript-atm/results'
+          threads: 1
+
+      - name: Upload SARIF results output
+        uses: actions/upload-artifact@v2
+        with:
+          name: javascript-atm.sarif
+          path: .github/codeql/codeql-javascript-atm/results/*.sarif
